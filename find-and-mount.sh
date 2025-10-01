@@ -28,7 +28,7 @@ log() {
 LOG_FILE="/tmp/$0.log"
 exec > >(tee -a $LOG_FILE) 2>&1
 DELAY_MINUTES=7
-log "Started execution"
+log "Started execution of $(pwd)/$0"
 log "Waiting for ${DELAY_MINUTES} minutes for resources to be available."
 sleep $((${DELAY_MINUTES}*60))
 
@@ -42,7 +42,6 @@ which showmount || sudo dnf install -y nfsutils
 #  Define the IP range to scan (adjust as needed)
 #======================================================
 IP_RANGE="10.0.0.0/28"
-MOUNT_POINT="/mnt/nfs_share"
 SCAN_PORT=2049
 
 #======================================================
@@ -62,7 +61,6 @@ log "Found NFS servers: $NFS_HOSTS"
 #======================================================
 for HOST in $NFS_HOSTS; do
   log "Checking NFS shares on $HOST..."
-  SHARES=$(showmount -e $HOST 2>/dev/null | awk 'NR>1 {print $1}')
   for SHARE in $(showmount -e $HOST 2>/dev/null | awk 'NR>1 {print $1}')
   do
     VOLUME=$(basename ${SHARE})
@@ -70,7 +68,7 @@ for HOST in $NFS_HOSTS; do
       log "Found volume '${VOLUME}' on $HOST"
       MOUNT_POINT="/mnt/$HOST/$VOLUME"
       sudo mkdir -p $MOUNT_POINT
-      sudo chmod 777 -R /mnt/$HOST
+      sudo chmod 777 -R /mnt/$MOUNT_POINT
       log "Mounting $HOST:$SHARE to $MOUNT_POINT..."
       sudo mount -t nfs -o rw,hard,rsize=262144,wsize=262144,vers=3,tcp $HOST:$SHARE $MOUNT_POINT
       if [ $? -eq 0 ]; then
