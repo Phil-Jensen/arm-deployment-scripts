@@ -58,31 +58,32 @@ fi
 log "Found NFS servers: $NFS_HOSTS"
 
 #======================================================
-# Try to find and mount a share from the first available host
+# Try to find and mount all non-root shares from hosts
 #======================================================
 for HOST in $NFS_HOSTS; do
-    log "Checking NFS shares on $HOST..."
-    SHARES=$(showmount -e $HOST 2>/dev/null | awk 'NR>1 {print $1}')
-    
-    if [ -n "$SHARES" ]; then
-        SHARE=$(echo "$SHARES" | head -n 1)
-        log "Found share $SHARE on $HOST"
-
-        # Create mount point if it doesn't exist
-        sudo mkdir -p $MOUNT_POINT
-
-        # Mount the share
-        log "Mounting $HOST:$SHARE to $MOUNT_POINT..."
-        sudo mount -t nfs $HOST:$SHARE $MOUNT_POINT
-
-        if [ $? -eq 0 ]; then
-            log "Successfully mounted $HOST:$SHARE to $MOUNT_POINT"
-            exit 0
-        else
-            log "Failed to mount $HOST:$SHARE"
-        fi
+  log "Checking NFS shares on $HOST..."
+  SHARES=$(showmount -e $HOST 2>/dev/null | awk 'NR>1 {print $1}')
+  for SHARE in $(showmount -e $HOST 2>/dev/null | awk 'NR>1 {print $1}')
+  do
+    VOLUME=$(basename ${SHARE})
+    if [ "${VOLUME}" != "/" ]; then
+      log "Found volume '${VOLUME}' on $HOST"
+      MOUNT_POINT="/mnt/$HOST/$VOLUME"
+      sudo mkdir -p $MOUNT_POINT
+      sudo chmod 777 -R /mnt/$HOST
+      log "Mounting $HOST:$SHARE to $MOUNT_POINT..."
+      sudo mount -t nfs -o rw,hard,rsize=262144,wsize=262144,vers=3,tcp $HOST:$SHARE $MOUNT_POINT
+      if [ $? -eq 0 ]; then
+        log "Successfully mounted $HOST:$SHARE to $MOUNT_POINT"
+        sudo mkdir $MOUNT_POINT/target
+        sudo chmod 777 $MOUNT_POINT/target
+        touch $MOUNT_POINT/target/junk && log "Directory '$MOUNT_POINT/target' is user writable."
+      else
+        log "Failed to mount $HOST:$SHARE"
+      fi
     fi
+  done
 done
 
-log "No mountable NFS shares found."
-exit 1
+log "Finished execution."
+exit 0
