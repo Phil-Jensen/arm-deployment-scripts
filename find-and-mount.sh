@@ -1,5 +1,13 @@
 #!/bin/bash
 
+LOG_FILE="$0.log"
+exec > >(tee -a $LOG_FILE) 2>&1
+
+DELAY_MINUTES=7
+echo "Waiting for ${DELAY_MINUTES} minutes for resources to be available."
+sleep $((${DELAY_MINUTES}*60))
+
+
 # Install dependencies
 which nmap || sudo dnf install -y nmap
 which showmount || sudo dnf install -y nfsutils
