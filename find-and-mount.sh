@@ -68,7 +68,7 @@ for HOST in $NFS_HOSTS; do
       log "Found volume '${VOLUME}' on $HOST"
       MOUNT_POINT="/mnt/$HOST/$VOLUME"
       sudo mkdir -p $MOUNT_POINT
-      sudo chmod 777 -R /mnt/$MOUNT_POINT
+      sudo chmod -R 777 $MOUNT_POINT
       log "Mounting $HOST:$SHARE to $MOUNT_POINT..."
       sudo mount -t nfs -o rw,hard,rsize=262144,wsize=262144,vers=3,tcp $HOST:$SHARE $MOUNT_POINT
       if [ $? -eq 0 ]; then
