@@ -33,8 +33,8 @@ MOUNT_OPTS="rw,hard,vers=3,tcp,rsize=1048576,wsize=1048576"
 #---------------------------------------
 # Logging helpers
 #---------------------------------------
-log() { printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> ${LOG_FILE}; }
-err() { printf '%s - ERROR: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
+log() { printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${LOG_FILE}"; }
+err() { printf '%s - ERROR: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${LOG_FILE}"; }
 panic() { err "$*"; exit 1; }
 
 trap 'panic "Unexpected failure at line ${LINENO}. Exiting."' ERR
@@ -73,11 +73,8 @@ scan_nfs_hosts() {
 
 list_exports() {
   local _HOST="$1"
-  local _DELAY_SECS=10
   # Skip header line from showmount -e
-  log "Checking for exports on $_HOST in $_DELAY_SECS seconds"
-  sleep $_DELAY_SECS
-  showmount --no-headers -e "$_HOST" 2>/dev/null | awk 'NR>1 {print $1}'
+  showmount --no-headers -e "$_HOST" 2>/dev/null | awk '{print $1}'
 }
 
 mount_share() {
@@ -96,11 +93,8 @@ mount_share() {
   sudo mkdir -p "$_MOUNT_POINT"
   sudo chmod -R 0777 "$_MOUNT_POINT"
 
-  local _OPTS
-  _OPTS="$(IFS=,; echo "${MOUNT_OPTS[*]}")"
-
-  log "Mounting ${_HOST}:${_SHARE} -> ${_MOUNT_POINT} (opts: ${_OPTS})"
-  if sudo mount -t nfs -o "${_OPTS}" "${_HOST}:${_SHARE}" "$_MOUNT_POINT"; then
+  log "Mounting ${_HOST}:${_SHARE} -> ${_MOUNT_POINT} (opts: ${MOUNT_OPTS})"
+  if sudo mount -t nfs -o "${MOUNT_OPTS}" "${_HOST}:${_SHARE}" "$_MOUNT_POINT"; then
     log "Successfully mounted ${_HOST}:${_SHARE}"
     local _TARGET="${_MOUNT_POINT}/target"
     sudo mkdir -p "$_TARGET"
@@ -139,6 +133,26 @@ poll_for_nfs() {
 }
 
 
+# Poll for non-root exports on a given host
+poll_for_non_root_exports() {
+  local _HOST="$1" _TIMEOUT_MIN="$2" _INTERVAL_SEC="$3"
+  local _DEADLINE=$((SECONDS + (_TIMEOUT_MIN * 60)))
+
+  while (( SECONDS < _DEADLINE )); do
+    # Collect exports and filter out root ("/")
+    mapfile -t NON_ROOT_EXPORTS < <(list_exports "$_HOST" | awk '$1 != "/" {print $1}')
+    if [[ ${#NON_ROOT_EXPORTS[@]} -gt 0 ]]; then
+      log "Non-root exports detected on ${_HOST}: ${NON_ROOT_EXPORTS[*]}"
+      return 0
+    fi
+    log "No non-root exports on ${_HOST} yet. Retrying in ${_INTERVAL_SEC}s (time left: $((_DEADLINE-SECONDS))s)..."
+    sleep "$_INTERVAL_SEC"
+  done
+
+  return 1
+}
+
+
 #---------------------------------------
 # Main
 #---------------------------------------
@@ -160,11 +174,9 @@ main() {
 
   # Enumerate & mount
   for HOST in "${NFS_HOSTS[@]}"; do
-    log "Checking NFS exports on ${HOST}..."
-    mapfile -t EXPORTS < <(list_exports "$HOST")
-
-    if [[ ${#EXPORTS[@]} -eq 0 ]]; then
-      log "No exports found on ${HOST}."
+    log "Polling for non-root exports on ${HOST}..."
+    if ! poll_for_non_root_exports "$HOST" "$POLL_TIMEOUT_MINUTES" "$POLL_INTERVAL_SECONDS"; then
+      log "No non-root exports became available on ${HOST} within timeout. Skipping host."
       continue
     fi
 
