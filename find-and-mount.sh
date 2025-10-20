@@ -73,8 +73,11 @@ scan_nfs_hosts() {
 
 list_exports() {
   local _HOST="$1"
+  local _DELAY_SECS=10
   # Skip header line from showmount -e
-  showmount -e "$_HOST" 2>/dev/null | awk 'NR>1 {print $1}'
+  log "Checking for exports on $_HOST in $_DELAY_SECS seconds"
+  sleep $_DELAY_SECS
+  showmount --no-headers -e "$_HOST" 2>/dev/null | awk 'NR>1 {print $1}'
 }
 
 mount_share() {
