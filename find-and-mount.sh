@@ -180,7 +180,7 @@ main() {
       continue
     fi
 
-    for SHARE in "${EXPORTS[@]}"; do
+    for SHARE in "${NON_ROOT_EXPORTS[@]}"; do
       mount_share "$HOST" "$SHARE"
     done
   done
