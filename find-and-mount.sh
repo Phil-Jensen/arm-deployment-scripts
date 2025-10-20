@@ -19,42 +19,23 @@ set -Eeuo pipefail
 
 #---------------------------------------
 # Constants / Configuration
-#
-# Can be overridden with environment variables, for example:
-# 	export POLL_TIMEOUT_MINUTES=10
-# 	export POLL_INTERVAL_SECONDS=20
-# 	export IP_RANGE="10.1.2.0/24"
-# 	export MOUNT_OPTS="rw,hard,vers=4.1,tcp,rsize=1048576,wsize=1048576"
 #---------------------------------------
-IP_RANGE="${IP_RANGE:-10.0.0.0/28}"            # Subnet to scan (override via env)
-SCAN_PORT="${SCAN_PORT:-2049}"                 # NFS port
-POLL_TIMEOUT_MINUTES="${POLL_TIMEOUT_MINUTES:-7}"   # Max time to wait for NFS availability
-POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-30}"# Poll interval
-TMP_DIR="${TMPDIR:-/tmp}"
-LOG_FILE="${LOG_FILE:-${TMP_DIR}/$(basename "$0").log}"
-
-MOUNT_BASE="${MOUNT_BASE:-/mnt}"
-# Intentional NFSv3 by default; adjust if needed via env: MOUNT_OPTS
-# Use an array to avoid word-splitting pitfalls
-MOUNT_OPTS_DEFAULT=(rw hard rsize=262144 wsize=262144 vers=3 tcp)
-# If MOUNT_OPTS is provided as a comma-separated string, use it; otherwise default
-if [[ -n "${MOUNT_OPTS:-}" ]]; then
-  IFS=',' read -r -a MOUNT_OPTS <<< "${MOUNT_OPTS}"
-else
-  MOUNT_OPTS=("${MOUNT_OPTS_DEFAULT[@]}")
-fi
+IP_RANGE="10.0.0.0/28"
+SCAN_PORT="2049"
+POLL_TIMEOUT_MINUTES="7"
+POLL_INTERVAL_SECONDS="30"
+TMP_DIR="/tmp"
+LOG_FILE="${TMP_DIR}/$(basename "$0").log"
+MOUNT_BASE="/mnt"
+MOUNT_OPTS="rw,hard,vers=3,tcp,rsize=1048576,wsize=1048576"
 
 
 #---------------------------------------
 # Logging helpers
 #---------------------------------------
-log() { printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+log() { printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> ${LOG_FILE}; }
 err() { printf '%s - ERROR: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 panic() { err "$*"; exit 1; }
-
-# Redirect all output (stdout and stderr) to LOG_FILE **only**
-# (No console output)
-exec >>"$LOG_FILE" 2>&1
 
 trap 'panic "Unexpected failure at line ${LINENO}. Exiting."' ERR
 
