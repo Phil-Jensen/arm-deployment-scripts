@@ -5,97 +5,155 @@
 # Licensed for your reference purposes only on an as is basis, without warranty of any kind.
 #
 # title          : find-and-mount.sh
-# description    : This is script to find and mount a single NFS share in a specific subnet.
+# description    : This script finds and mounts NFS shares in a specific subnet.
 # author         : phjensen
 # usage          : bash find-and-mount.sh
 # required para  : None
 # optional para  : None
-# dependency     : None
-# logging        : Metrics/infomation and Error logs are sent to stdout and ${LOG_FILE} as string.
-# notes:         : This is a simple script to search a given subnet for an NFS share and then mount it to a specific location for testing.
+# dependency     : nmap, nfs-utils (showmount)
+# logging        : Metrics/information and error logs are sent to ${LOG_FILE} only.
+# notes          : Searches a given subnet for NFS servers, enumerates exports, and mounts them.
 #====================================================================================
 
 set -Eeuo pipefail
 
 #---------------------------------------
 # Constants / Configuration
+#
+# Can be overridden with environment variables, for example:
+# 	export POLL_TIMEOUT_MINUTES=10
+# 	export POLL_INTERVAL_SECONDS=20
+# 	export IP_RANGE="10.1.2.0/24"
+# 	export MOUNT_OPTS="rw,hard,vers=4.1,tcp,rsize=1048576,wsize=1048576"
 #---------------------------------------
-IP_RANGE="10.0.0.0/28"            # Subnet to scan
-SCAN_PORT=2049                    # NFS port
-DELAY_MINUTES=7                   # Wait time for resource readiness
-TMPDIR="${TMPDIR:-/tmp}"
-LOG_FILE="${TMPDIR}/$(basename "$0").log"
+IP_RANGE="${IP_RANGE:-10.0.0.0/28}"            # Subnet to scan (override via env)
+SCAN_PORT="${SCAN_PORT:-2049}"                 # NFS port
+POLL_TIMEOUT_MINUTES="${POLL_TIMEOUT_MINUTES:-7}"   # Max time to wait for NFS availability
+POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-30}"# Poll interval
+TMP_DIR="${TMPDIR:-/tmp}"
+LOG_FILE="${LOG_FILE:-${TMP_DIR}/$(basename "$0").log}"
 
-MOUNT_BASE="/mnt"
-MOUNT_OPTS=(rw hard rsize=262144 wsize=262144 vers=3 tcp)  # Intentional v3; adjust if needed
+MOUNT_BASE="${MOUNT_BASE:-/mnt}"
+# Intentional NFSv3 by default; adjust if needed via env: MOUNT_OPTS
+# Use an array to avoid word-splitting pitfalls
+MOUNT_OPTS_DEFAULT=(rw hard rsize=262144 wsize=262144 vers=3 tcp)
+# If MOUNT_OPTS is provided as a comma-separated string, use it; otherwise default
+if [[ -n "${MOUNT_OPTS:-}" ]]; then
+  IFS=',' read -r -a MOUNT_OPTS <<< "${MOUNT_OPTS}"
+else
+  MOUNT_OPTS=("${MOUNT_OPTS_DEFAULT[@]}")
+fi
+
 
 #---------------------------------------
 # Logging helpers
 #---------------------------------------
 log() { printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 err() { printf '%s - ERROR: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
-die() { err "$*"; exit 1; }
+panic() { err "$*"; exit 1; }
 
-# Redirect all output to both stdout and LOG_FILE
-exec > >(tee -a "$LOG_FILE") 2>&1
+# Redirect all output (stdout and stderr) to LOG_FILE **only**
+# (No console output)
+exec >>"$LOG_FILE" 2>&1
 
-trap 'err "Unexpected failure at line ${LINENO}. Exiting."; exit 1' ERR
+trap 'panic "Unexpected failure at line ${LINENO}. Exiting."' ERR
+
 
 #---------------------------------------
 # Dependencies
 #---------------------------------------
 ensure_dep() {
-  local bin="$1" pkg="$2"
-  if ! command -v "$bin" >/dev/null 2>&1; then
-    log "Installing dependency: $pkg (for $bin)"
-    sudo dnf install -y "$pkg"
+  local _BIN="$1" _PKG="$2"
+  if ! command -v "$_BIN" >/dev/null 2>&1; then
+    log "Installing dependency: ${_PKG} (for ${_BIN})"
+    # Using dnf to match original; adjust if your base image differs
+    if command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y "$_PKG"
+    elif command -v yum >/dev/null 2>&1; then
+      sudo yum install -y "$_PKG"
+    elif command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get update -y && sudo apt-get install -y "$_PKG"
+    else
+      panic "No supported package manager found to install ${_PKG}."
+    fi
   fi
 }
+
 
 #---------------------------------------
 # NFS scanning & mounting
 #---------------------------------------
 scan_nfs_hosts() {
-  local range="$1" port="$2"
-  log "Scanning IP range ${range} for NFS (port ${port})..."
+  local _RANGE="$1" _PORT="$2"
+  log "Scanning IP range ${_RANGE} for NFS (port ${_PORT})..."
   # Grepable output; extract IP field (column 2)
-  nmap -p "$port" --open -oG - "$range" | awk '/Ports: 2049\/open/ {print $2}'
+  nmap -p "$_PORT" --open -oG - "$_RANGE" | awk '/Ports: 2049\/open/ {print $2}'
 }
 
 list_exports() {
-  local host="$1"
+  local _HOST="$1"
   # Skip header line from showmount -e
-  showmount -e "$host" 2>/dev/null | awk 'NR>1 {print $1}'
+  showmount -e "$_HOST" 2>/dev/null | awk 'NR>1 {print $1}'
 }
 
 mount_share() {
-  local host="$1" share="$2"
-  local volume
-  volume="$(basename "$share")"
+  local _HOST="$1" _SHARE="$2"
+  local _VOLUME
+  _VOLUME="$(basename "$_SHARE")"
 
   # Skip root export
-  if [[ "$volume" == "/" ]]; then
-    log "Skipping root export on $host"
+  if [[ "$_VOLUME" == "/" ]]; then
+    log "Skipping root export on ${_HOST}"
     return 0
   fi
 
-  local mount_point="${MOUNT_BASE}/${host}/${volume}"
-  log "Preparing mount point: ${mount_point}"
-  sudo mkdir -p "$mount_point"
-  sudo chmod -R 0777 "$mount_point"
+  local _MOUNT_POINT="${MOUNT_BASE}/${_HOST}/${_VOLUME}"
+  log "Preparing mount point: ${_MOUNT_POINT}"
+  sudo mkdir -p "$_MOUNT_POINT"
+  sudo chmod -R 0777 "$_MOUNT_POINT"
 
-  log "Mounting ${host}:${share} -> ${mount_point}"
-  if sudo mount -t nfs -o "$(IFS=,; echo "${MOUNT_OPTS[*]}")" "${host}:${share}" "$mount_point"; then
-    log "Successfully mounted ${host}:${share}"
-    local target="${mount_point}/target"
-    sudo mkdir -p "$target"
-    sudo chmod 0777 "$target"
-    : > "${target}/junk" && log "Directory '${target}' is user-writable."
+  local _OPTS
+  _OPTS="$(IFS=,; echo "${MOUNT_OPTS[*]}")"
+
+  log "Mounting ${_HOST}:${_SHARE} -> ${_MOUNT_POINT} (opts: ${_OPTS})"
+  if sudo mount -t nfs -o "${_OPTS}" "${_HOST}:${_SHARE}" "$_MOUNT_POINT"; then
+    log "Successfully mounted ${_HOST}:${_SHARE}"
+    local _TARGET="${_MOUNT_POINT}/target"
+    sudo mkdir -p "$_TARGET"
+    sudo chmod 0777 "$_TARGET"
+    : > "${_TARGET}/junk" && log "Directory '${_TARGET}' is user-writable."
   else
-    err "Failed to mount ${host}:${share}"
+    err "Failed to mount ${_HOST}:${_SHARE}"
     return 1
   fi
 }
+
+
+# Poll until at least one NFS server is detected or timeout
+poll_for_nfs() {
+  local _RANGE="$1" _PORT="$2" _TIMEOUT_MIN="$3" _INTERVAL_SEC="$4"
+  local _DEADLINE=$((SECONDS + (_TIMEOUT_MIN * 60)))
+  local _REMAINING=0
+
+  while :; do
+    mapfile -t NFS_HOSTS < <(scan_nfs_hosts "$_RANGE" "$_PORT")
+    if [[ ${#NFS_HOSTS[@]} -gt 0 ]]; then
+      log "NFS servers detected: ${NFS_HOSTS[*]}"
+      return 0
+    fi
+
+    _REMAINING=$((_DEADLINE - SECONDS))
+    if (( _REMAINING <= 0 )); then
+      break
+    fi
+
+    log "No NFS servers found yet. Polling again in ${_INTERVAL_SEC}s (time left: ${_REMAINING}s)..."
+    sleep "$_INTERVAL_SEC"
+  done
+
+  return 1
+}
+
 
 #---------------------------------------
 # Main
@@ -104,34 +162,30 @@ main() {
   log "========================================"
   log "Started: $(pwd)/$(basename "$0")"
   log "Log file: $LOG_FILE"
+  log "Config: IP_RANGE=${IP_RANGE}, SCAN_PORT=${SCAN_PORT}, POLL_TIMEOUT_MINUTES=${POLL_TIMEOUT_MINUTES}, POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS}"
   log "========================================"
 
-  log "Waiting ${DELAY_MINUTES} minute(s) for resources to be available..."
-  sleep "$((DELAY_MINUTES * 60))"
-
-  # Dependencies
+  # (1) Ensure dependencies **before** any waiting/polling so we fail fast if missing
   ensure_dep nmap nmap
   ensure_dep showmount nfs-utils
 
-  # Scan
-  mapfile -t nfs_hosts < <(scan_nfs_hosts "$IP_RANGE" "$SCAN_PORT")
-  if [[ ${#nfs_hosts[@]} -eq 0 ]]; then
-    die "No NFS servers found in range ${IP_RANGE}."
+  # (2) Poll for NFS availability instead of a fixed sleep
+  if ! poll_for_nfs "$IP_RANGE" "$SCAN_PORT" "$POLL_TIMEOUT_MINUTES" "$POLL_INTERVAL_SECONDS"; then
+    panic "No NFS servers became available in range ${IP_RANGE} within ${POLL_TIMEOUT_MINUTES} minute(s)."
   fi
-  log "Found NFS servers: ${nfs_hosts[*]}"
 
   # Enumerate & mount
-  for host in "${nfs_hosts[@]}"; do
-    log "Checking NFS exports on ${host}..."
-    mapfile -t exports < <(list_exports "$host")
+  for HOST in "${NFS_HOSTS[@]}"; do
+    log "Checking NFS exports on ${HOST}..."
+    mapfile -t EXPORTS < <(list_exports "$HOST")
 
-    if [[ ${#exports[@]} -eq 0 ]]; then
-      log "No exports found on ${host}."
+    if [[ ${#EXPORTS[@]} -eq 0 ]]; then
+      log "No exports found on ${HOST}."
       continue
     fi
 
-    for share in "${exports[@]}"; do
-      mount_share "$host" "$share"
+    for SHARE in "${EXPORTS[@]}"; do
+      mount_share "$HOST" "$SHARE"
     done
   done
 
